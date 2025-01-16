@@ -1,16 +1,14 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 
 function BluetoothCommunication() {
   const [device, setDevice] = useState(null); // Armazena o dispositivo BLE
-  const [receivedData, setReceivedData] = useState(""); // Dados recebidos
+  const [receivedData, setReceivedData] = useState([]); // Dados recebidos (array para partes do JSON)
   const [error, setError] = useState(""); // Mensagem de erro
   const [connected, setConnected] = useState(false); // Estado de conexão
 
   const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca93";
-  const CHARACTERISTIC_UUID_TX = "6e400002-b5a3-f393-e0a9-e50e24dcca93"; // Recebe dados
-  const CHARACTERISTIC_UUID_RX = "6e400003-b5a3-f393-e0a9-e50e24dcca93"; // Envia comandos
+  const CHARACTERISTIC_UUID_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca93";
 
-  let characteristicRx = null; // Referência à característica RX
   let characteristicTx = null; // Referência à característica TX
 
   // Conecta ao dispositivo BLE
@@ -19,26 +17,27 @@ function BluetoothCommunication() {
     try {
       console.log("Solicitando dispositivos BLE...");
       const bleDevice = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true, // Alterado para aceitar todos os dispositivos
+        filters: [{ namePrefix: "BeaconNavigator" }], // Identifica dispositivos pelo nome
         optionalServices: [SERVICE_UUID],
       });
 
       setDevice(bleDevice);
       console.log("Dispositivo selecionado:", bleDevice.name);
 
+      bleDevice.addEventListener("gattserverdisconnected", handleDisconnection);
+
       const server = await bleDevice.gatt.connect();
       setConnected(true);
       console.log("Conectado ao dispositivo BLE:", bleDevice.name);
 
       const service = await server.getPrimaryService(SERVICE_UUID);
-      characteristicRx = await service.getCharacteristic(CHARACTERISTIC_UUID_RX);
       characteristicTx = await service.getCharacteristic(CHARACTERISTIC_UUID_TX);
 
-      // Inscreva-se para receber notificações da característica TX
+      // Inscreve-se para receber notificações da característica TX
       await characteristicTx.startNotifications();
       characteristicTx.addEventListener("characteristicvaluechanged", handleNotifications);
 
-      console.log("Conectado ao serviço e características BLE.");
+      console.log("Notificações ativadas para a característica TX.");
     } catch (err) {
       setError("Erro ao conectar ao dispositivo BLE. Verifique se o dispositivo está acessível.");
       console.error("Erro ao conectar ao dispositivo BLE:", err);
@@ -51,27 +50,40 @@ function BluetoothCommunication() {
       const value = event.target.value;
       const decoder = new TextDecoder("utf-8");
       const data = decoder.decode(value);
-      setReceivedData((prev) => `${prev}\n${data}`);
-      console.log("Dados recebidos via BLE:", data);
+
+      console.log("Parte recebida via BLE:", data);
+
+      // Adiciona a parte ao array de dados recebidos
+      setReceivedData((prev) => {
+        const updatedData = [...prev, data];
+
+        // Tenta montar o JSON completo
+        try {
+          const completeJson = JSON.parse(updatedData.join(""));
+          console.log("JSON completo recebido:", completeJson);
+          return []; // Limpa as partes após o JSON completo
+        } catch (err) {
+          // Caso ainda não seja um JSON válido, continua adicionando partes
+          return updatedData;
+        }
+      });
     } catch (err) {
       console.error("Erro ao processar notificação BLE:", err);
     }
   };
 
-  // Envia comando ao dispositivo pela característica RX
-  const sendCommand = async (command) => {
-    if (!characteristicRx) {
-      setError("Não está conectado ao dispositivo.");
-      return;
-    }
+  // Manipula desconexão e tenta reconectar
+  const handleDisconnection = async () => {
+    console.log("Conexão perdida. Tentando reconectar...");
+    setConnected(false);
     try {
-      const encoder = new TextEncoder("utf-8");
-      const commandEncoded = encoder.encode(command);
-      await characteristicRx.writeValue(commandEncoded);
-      console.log("Comando enviado:", command);
+      if (device && !device.gatt.connected) {
+        await device.gatt.connect();
+        console.log("Reconectado ao dispositivo BLE:", device.name);
+        connectToDevice(); // Reinicia o fluxo de conexão
+      }
     } catch (err) {
-      setError("Erro ao enviar comando ao dispositivo.");
-      console.error("Erro ao enviar comando:", err);
+      console.error("Falha ao tentar reconectar:", err);
     }
   };
 
@@ -84,9 +96,18 @@ function BluetoothCommunication() {
     }
   };
 
+  useEffect(() => {
+    // Limpeza ao desmontar o componente
+    return () => {
+      if (device && device.gatt.connected) {
+        device.gatt.disconnect();
+      }
+    };
+  }, [device]);
+
   return (
     <div style={{ padding: "20px", fontFamily: "Arial, sans-serif" }}>
-      <h1>Comunicação BLE</h1>
+      <h1>Leitura de Servidor BLE</h1>
       <button
         onClick={connectToDevice}
         style={{
@@ -120,23 +141,9 @@ function BluetoothCommunication() {
         Desconectar
       </button>
       {error && <p style={{ color: "red" }}>{error}</p>}
-      <h3>Enviar comando:</h3>
-      <input
-        type="text"
-        placeholder="Digite o comando"
-        onKeyDown={(e) => {
-          if (e.key === "Enter") sendCommand(e.target.value);
-        }}
-        style={{
-          padding: "10px",
-          width: "300px",
-          marginBottom: "10px",
-          fontSize: "16px",
-        }}
-      />
-      <h3>Dados recebidos:</h3>
+      <h3>Dados recebidos (Partes):</h3>
       <textarea
-        value={receivedData}
+        value={receivedData.join("\n")}
         readOnly
         style={{
           width: "100%",
