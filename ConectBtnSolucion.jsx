@@ -5,12 +5,11 @@ function BluetoothRead() {
   const [readData, setReadData] = useState(""); // Dados lidos da característica
   const [error, setError] = useState(""); // Mensagem de erro
   const [connected, setConnected] = useState(false); // Estado de conexão
+  const [characteristicTx, setCharacteristicTx] = useState(null); // Característica TX
 
   // UUIDs para o serviço e característica
   const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca93";
   const CHARACTERISTIC_UUID_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca93";
-
-  let characteristicTx = null; // Referência à característica TX
 
   // Conecta ao dispositivo BLE
   const connectToDevice = async () => {
@@ -33,7 +32,8 @@ function BluetoothRead() {
       console.log("Conectado ao dispositivo BLE:", bleDevice.name);
 
       const service = await server.getPrimaryService(SERVICE_UUID);
-      characteristicTx = await service.getCharacteristic(CHARACTERISTIC_UUID_TX);
+      const characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID_TX);
+      setCharacteristicTx(characteristic); // Armazena a característica no estado
       console.log("Característica encontrada. Pronto para leitura.");
     } catch (err) {
       setError("Erro ao conectar ao dispositivo BLE. Verifique se o dispositivo está acessível.");
@@ -64,6 +64,7 @@ function BluetoothRead() {
   const handleDisconnection = () => {
     console.log("Conexão perdida.");
     setConnected(false);
+    setCharacteristicTx(null); // Limpa a característica ao desconectar
   };
 
   // Desconecta do dispositivo BLE
@@ -71,6 +72,7 @@ function BluetoothRead() {
     if (device && device.gatt.connected) {
       device.gatt.disconnect();
       setConnected(false);
+      setCharacteristicTx(null); // Limpa a característica ao desconectar
       console.log("Dispositivo desconectado.");
     }
   };
@@ -115,7 +117,7 @@ function BluetoothRead() {
           border: "none",
           borderRadius: "5px",
         }}
-        disabled={!connected}
+        disabled={!connected || !characteristicTx}
       >
         Ler Dados
       </button>
@@ -136,7 +138,7 @@ function BluetoothRead() {
         Desconectar
       </button>
       {error && <p style={{ color: "red" }}>{error}</p>}
-      <h3>Dados Lidos:</h3>
+        <h3 style={{color: "white"}}>Dados Lidos:</h3>
       <textarea
         value={readData}
         readOnly
