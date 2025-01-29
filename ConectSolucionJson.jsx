@@ -3,8 +3,8 @@ import "./BeaconConect.css"; // Importando o arquivo CSS externo
 
 function BluetoothRead() {
   const [device, setDevice] = useState(null); 
-  const [readData, setReadData] = useState(""); 
-  const [parsedJson, setParsedJson] = useState([]); // Armazenar JSON, se for esse o formato
+  const [readData, setReadData] = useState(""); // Dados brutos lidos
+  const [parsedJson, setParsedJson] = useState(null); // Dados JSON parseados (se aplicável)
   const [error, setError] = useState(""); 
   const [connected, setConnected] = useState(false); 
   const [characteristicTx, setCharacteristicTx] = useState(null); 
@@ -46,14 +46,14 @@ function BluetoothRead() {
       const decoder = new TextDecoder("utf-8");
       const data = decoder.decode(value);
 
-      setReadData(data); // Armazenar os dados recebidos como texto bruto
+      setReadData(data); // Sempre armazena os dados como texto bruto
 
-      // Tentar interpretar como JSON
+      // Detectar se os dados são JSON
       try {
-        const jsonData = JSON.parse(data); // Se for JSON válido, parseamos
-        setParsedJson(jsonData); // Armazenamos o JSON parseado
+        const jsonData = JSON.parse(data); // Se for JSON válido
+        setParsedJson(jsonData);
       } catch {
-        setParsedJson([]); // Não é JSON, limpa qualquer JSON existente
+        setParsedJson(null); // Não é JSON, mantém os dados brutos
       }
     } catch (err) {
       setError("Erro ao ler a característica.");
@@ -107,7 +107,7 @@ function BluetoothRead() {
       </button>
       {error && <p className="error-message">{error}</p>}
       <h3 className="read-data-title">Dados Lidos:</h3>
-      {parsedJson.length > 0 ? (
+      {parsedJson ? (
         <table className="read-data-table">
           <thead>
             <tr>
