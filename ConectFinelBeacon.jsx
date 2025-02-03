@@ -1,12 +1,20 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useRef } from "react";
 
 export default function BeaconConect() {
   const [device, setDevice] = useState(null);
-  const [jsonString, setJsonString] = useState(""); // Armazena os chunks recebidos
-  const [data, setData] = useState(null); // Armazena os dados processados
-  const [error, setError] = useState(null); // Armazena mensagens de erro
+  const [dataList, setDataList] = useState([]);
+  const [error, setError] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [logMessages, setLogMessages] = useState([]);
+  const receivedMessages = useRef(new Set());
 
-  // Função para validar JSON
+  const jsonBufferRef = useRef("");
+  let characteristicRef = useRef(null);
+
+  const addLogMessage = (message) => {
+    setLogMessages((prevLogs) => [...prevLogs, message]);
+  };
+
   const isValidJSON = (string) => {
     try {
       JSON.parse(string);
@@ -16,96 +24,154 @@ export default function BeaconConect() {
     }
   };
 
-  // Função para processar os chunks recebidos
   const handleChunk = (chunk) => {
     try {
-      // Remover caracteres não imprimíveis
       chunk = chunk.replace(/[^\x20-\x7E]/g, "");
+      jsonBufferRef.current += chunk;
+      addLogMessage(`Chunk recebido: ${chunk}`);
 
-      // Adicionar o chunk ao buffer
-      const updatedJsonString = jsonString + chunk;
+      if (jsonBufferRef.current.includes("}")) {
+        let possibleJSON = jsonBufferRef.current;
+        if (isValidJSON(possibleJSON)) {
+          const parsedData = JSON.parse(possibleJSON);
 
-      // Tentar parsear o JSON
-      if (isValidJSON(updatedJsonString)) {
-        const parsedData = JSON.parse(updatedJsonString);
-        setData(parsedData);
-        setJsonString(""); // Limpar buffer após parsear
-      } else {
-        setJsonString(updatedJsonString); // Continuar aguardando mais dados
+          if (parsedData._id && receivedMessages.current.has(parsedData._id)) {
+            addLogMessage("Mensagem repetida detectada, ignorando...");
+            return;
+          }
+
+          if (parsedData._id) {
+            receivedMessages.current.add(parsedData._id);
+          }
+
+          setDataList((prevList) => [...prevList, parsedData]);
+          jsonBufferRef.current = "";
+        }
       }
     } catch (e) {
-      setError("Erro ao processar o chunk recebido.");
-      console.error("Erro ao processar chunk:", chunk, e);
+      setError("Erro ao processar chunk recebido.");
+      addLogMessage(`Erro ao processar chunk: ${chunk} - ${e.message}`);
     }
   };
 
-  // Função de conexão BLE
   const connectToDevice = async () => {
     try {
-      console.log("Solicitando dispositivo BLE...");
+      addLogMessage("Solicitando dispositivo BLE...");
       const bleDevice = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
-        optionalServices: ["6e400001-b5a3-f393-e0a9-e50e24dcca93"], // Substitua pelo UUID correto
+        optionalServices: ["6e400001-b5a3-f393-e0a9-e50e24dcca93"],
       });
 
-      console.log("Dispositivo selecionado:", bleDevice.name);
+      addLogMessage(`Dispositivo selecionado: ${bleDevice.name}`);
       setDevice(bleDevice);
 
-      console.log("Conectando ao GATT Server...");
-      const server = await bleDevice.gatt.connect();
-      console.log("GATT Server conectado.");
+      bleDevice.addEventListener("gattserverdisconnected", async () => {
+        addLogMessage("Dispositivo desconectado, tentando reconectar...");
+        setIsConnected(false);
+        await reconnectDevice(bleDevice);
+      });
 
-      console.log("Obtendo serviço...");
-      const service = await server.getPrimaryService("6e400001-b5a3-f393-e0a9-e50e24dcca93");
+      await establishConnection(bleDevice);
+    } catch (e) {
+      setError("Erro ao conectar ao dispositivo.");
+      addLogMessage(`Erro ao conectar: ${e.message}`);
+    }
+  };
 
-      console.log("Obtendo característica...");
+  const establishConnection = async (bleDevice) => {
+    try {
+      if (!bleDevice.gatt.connected) {
+        addLogMessage("Tentando conectar ao GATT Server...");
+        await bleDevice.gatt.connect();
+      }
+
+      // Verificação adicional do estado de conexão
+      if (!bleDevice.gatt.connected) {
+        throw new Error("O GATT Server ainda está desconectado após tentativa de conexão.");
+      }
+
+      addLogMessage("GATT Server conectado.");
+      setIsConnected(true);
+
+      addLogMessage("Obtendo serviço...");
+      const service = await bleDevice.gatt.getPrimaryService("6e400001-b5a3-f393-e0a9-e50e24dcca93");
+
+      addLogMessage("Obtendo característica...");
       const characteristic = await service.getCharacteristic("6e400003-b5a3-f393-e0a9-e50e24dcca93");
+      characteristicRef.current = characteristic;
 
-      console.log("Iniciando leitura...");
+      addLogMessage("Iniciando leitura...");
       characteristic.addEventListener("characteristicvaluechanged", (event) => {
         const value = new TextDecoder().decode(event.target.value);
-        console.log("Chunk recebido:", value);
         handleChunk(value);
       });
 
       await characteristic.startNotifications();
-      console.log("Notificações iniciadas.");
+      addLogMessage("Notificações iniciadas.");
     } catch (e) {
-      setError("Erro ao conectar ao dispositivo.");
-      console.error("Erro ao conectar:", e);
+      setError("Erro ao recuperar serviços BLE.");
+      addLogMessage(`Erro ao recuperar serviços BLE: ${e.message}`);
+
+      if (bleDevice.gatt.connected) {
+        addLogMessage("Desconectando e tentando novamente...");
+        bleDevice.gatt.disconnect();
+      }
+
+      await reconnectDevice(bleDevice);
     }
   };
 
-  useEffect(() => {
-    if (device) {
-      // Lidando com desconexão
-      device.addEventListener("gattserverdisconnected", () => {
-        console.log("Dispositivo desconectado.");
-        setDevice(null);
-      });
+  const reconnectDevice = async (bleDevice) => {
+    let attempts = 0;
+    const maxAttempts = 5;
+
+    while (attempts < maxAttempts && !bleDevice.gatt.connected) {
+      try {
+        addLogMessage(`Tentando reconectar... (Tentativa ${attempts + 1})`);
+        await new Promise((resolve) => setTimeout(resolve, 5000)); // Aumentando o tempo de espera para 5 segundos
+        await establishConnection(bleDevice);
+        if (bleDevice.gatt.connected) {
+          addLogMessage("Reconectado com sucesso!");
+          break;
+        }
+      } catch (e) {
+        addLogMessage(`Falha na tentativa ${attempts + 1}: ${e.message}`);
+      }
+      attempts++;
     }
-  }, [device]);
+
+    if (attempts === maxAttempts) {
+      addLogMessage("Falha ao reconectar após várias tentativas. Reconecte manualmente.");
+    }
+  };
+
+  const disconnectDevice = () => {
+    if (device && device.gatt.connected) {
+      device.gatt.disconnect();
+      addLogMessage("Dispositivo desconectado manualmente.");
+    }
+    setDevice(null);
+    setIsConnected(false);
+  };
 
   return (
     <div>
       <h1>Conectar ao Beacon</h1>
-      {device ? (
-        <p>Dispositivo conectado: {device.name}</p>
+      {isConnected ? (
+        <div>
+          <p>Dispositivo conectado: {device.name}</p>
+          <button onClick={disconnectDevice}>Desconectar</button>
+        </div>
       ) : (
         <button onClick={connectToDevice}>Conectar</button>
       )}
-      {data && (
-        <div>
-          <h2>Dados Recebidos:</h2>
-          <pre>{JSON.stringify(data, null, 2)}</pre>
-        </div>
-      )}
-      {error && (
-        <div>
-          <h2>Erro:</h2>
-          <p>{error}</p>
-        </div>
-      )}
+
+      <h2>Logs:</h2>
+      <div style={{ background: "#f8f8f8", padding: "10px", borderRadius: "5px", maxHeight: "200px", overflowY: "auto" }}>
+        {logMessages.map((msg, index) => (
+          <p key={index} style={{ margin: "5px 0", fontSize: "12px", fontFamily: "monospace" }}>{msg}</p>
+        ))}
+      </div>
     </div>
   );
 }
