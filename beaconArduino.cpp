@@ -4,13 +4,17 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
 // Configurações de Wi-Fi
 const char* ssid = "Beacon Navigator";
 const char* password = "Beacon2025";
-const char* beaconBLEServerName = "BeaconNavigator.999";
-const char* serverAddressIP = "http://192.168.137.1";  // Endereço do servidor
-const char* serverAddressDir = ":5000/api/informes";  // Endereço da API
+const char* beaconBLEServerName = "BeaconNavigator";
+const char* serverAddressIP = "http://192.168.137.1";
+const char* serverAddressDir = ":5000/api/informes";
 
 // UUIDs do BLE
 #define SERVICE_UUID        "6e400001-b5a3-f393-e0a9-e50e24dcca93"
@@ -27,12 +31,19 @@ bool deviceConnected = false;
 bool oldDeviceConnected = false;
 
 // Configuração do tamanho de pacotes BLE
-const int MTU_SIZE = 23;  // MTU padrão para BLE
+const int MTU_SIZE = 23;
 int currentOffset = 0;
 
 // Intervalo de envio de pacotes BLE
 unsigned long lastSendTime = 0;
-const unsigned long sendInterval = 100;  // 100ms entre envios
+const unsigned long sendInterval = 100;
+
+// OLED
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+#define SCREEN_ADDRESS 0x3C
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // Função para conectar ao Wi-Fi
 void connectToWiFi() {
@@ -114,8 +125,24 @@ class MyServerCallbacks : public BLEServerCallbacks {
 
 void setup() {
   Serial.begin(115200);
-  delay(2000);  // Aguarda para capturar logs iniciais
+  delay(2000);
   Serial.println("Inicializando...");
+
+  // Inicializar OLED
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+    Serial.println(F("Erro OLED"));
+    for (;;);
+  }
+
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(35, 20);
+  display.println("Claro");
+  display.setCursor(35, 40);
+  display.setTextSize(1.9);
+  display.println("Mobile");
+  display.display();
 
   // Conectar ao Wi-Fi
   connectToWiFi();
@@ -146,7 +173,7 @@ void setup() {
 }
 
 void loop() {
-  delay(10);  // Alivia a CPU
+  delay(10);
 
   if (deviceConnected) {
     unsigned long now = millis();
@@ -157,7 +184,7 @@ void loop() {
 
     if (currentOffset >= strlen(jsonBuffer)) {
       Serial.println("JSON enviado completo!");
-      currentOffset = 0;  // Reinicia para um novo cliente, se necessário
+      currentOffset = 0;
       delay(1000);
     }
   }
